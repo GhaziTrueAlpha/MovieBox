@@ -62,7 +62,7 @@ def main():
     has_dramachi = dr_client_rs.exists() and "impl Provider for" in dr_mod_src
     has_dramachi_rel = has_dramachi and "ReleaseProvider for" in dr_mod_src
 
-    for mp in (fk_mod_rs, vendor_dir / "src/providers/dramachi/mod.rs"):
+    for mp in (fk_mod_rs,):
         if mp.exists():
             mp.write_text(read_text(mp).replace("mod client;", "pub mod client;"), encoding="utf-8")
     fk_mod_src = read_text(fk_mod_rs)
