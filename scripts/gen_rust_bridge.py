@@ -71,6 +71,7 @@ crate-type = ["cdylib"]
 [dependencies]
 moviebox-tui = { path = "../vendor/MovieBox-Tui" }
 jni = "0.21"
+ndk-context = "0.1"
 once_cell = "1.20"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde_json = "1.0"
@@ -91,7 +92,7 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
     resolve_arm = f'        "4khdhub" => FOURK.{resolve_fn}(&url).await.map(|v| serde_json::to_value(v).unwrap_or_default()).map_err(|e| e.to_string()),' if (has_fourk and resolve_fn) else ""
 
     lib_rs = f"""use jni::JNIEnv;
-use jni::objects::{{JClass, JString}};
+use jni::objects::{{JClass, JObject, JString}};
 use jni::sys::{{jint, jstring}};
 use moviebox_tui::providers::moviebox::client::{mb_struct};
 {fourk_import}
@@ -99,7 +100,10 @@ use moviebox_tui::providers::moviebox::client::{mb_struct};
 use moviebox_tui::providers::{{Provider, ReleaseProvider}};
 use once_cell::sync::Lazy;
 use serde_json::json;
+use std::sync::Once;
 use tokio::runtime::Runtime;
+
+static NDK_INIT: Once = Once::new();
 
 fn ensure_tls() {{
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -135,9 +139,21 @@ fn err_json(msg: impl ToString) -> String {{
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeInit<'local>(
-    mut env: JNIEnv<'local>, _class: JClass<'local>, data_dir: JString<'local>,
+    mut env: JNIEnv<'local>, _class: JClass<'local>, context: JObject<'local>, data_dir: JString<'local>,
 ) {{
     ensure_tls();
+    NDK_INIT.call_once(|| {{
+        if let Ok(vm) = env.get_java_vm() {{
+            if let Ok(global_ctx) = env.new_global_ref(context) {{
+                let ctx_ptr = global_ctx.as_raw() as *mut std::ffi::c_void;
+                let vm_ptr = vm.get_java_vm_pointer() as *mut std::ffi::c_void;
+                std::mem::forget(global_ctx);
+                unsafe {{
+                    ndk_context::initialize_android_context(vm_ptr, ctx_ptr);
+                }}
+            }}
+        }}
+    }});
     let dir = get_str(&mut env, data_dir);
     if !dir.is_empty() {{
         unsafe {{
