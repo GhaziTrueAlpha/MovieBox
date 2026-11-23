@@ -41,7 +41,7 @@ jobs:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
         run: |
           mkdir -p app/src/main/jniLibs
-          cargo ndk -t arm64-v8a -o app/src/main/jniLibs build --release --manifest-path rust-bridge/Cargo.toml
+          cd rust-bridge && cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
