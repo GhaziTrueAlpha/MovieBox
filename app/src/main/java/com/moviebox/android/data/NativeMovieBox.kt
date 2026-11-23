@@ -11,6 +11,7 @@ object NativeMovieBox {
         System.loadLibrary("moviebox_ffi")
     }
 
+    external fun nativeInit(dataDir: String)
     private external fun nativeHomepage(page: Int): String
     private external fun nativeSearch(provider: String, query: String, page: Int): String
     private external fun nativeDetails(provider: String, id: String): String

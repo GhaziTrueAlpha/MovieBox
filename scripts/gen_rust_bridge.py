@@ -72,6 +72,7 @@ crate-type = ["cdylib"]
 moviebox-tui = { path = "../vendor/MovieBox-Tui" }
 jni = "0.21"
 once_cell = "1.20"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 """, encoding="utf-8")
@@ -100,14 +101,19 @@ use once_cell::sync::Lazy;
 use serde_json::json;
 use tokio::runtime::Runtime;
 
+fn ensure_tls() {{
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}}
+
 static RUNTIME: Lazy<Runtime> = Lazy::new(|| {{
+    ensure_tls();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("Failed to create Tokio runtime")
 }});
 
-static MOVIEBOX: Lazy<{mb_struct}> = Lazy::new(|| {mb_ctor});
+static MOVIEBOX: Lazy<{mb_struct}> = Lazy::new(|| {{ ensure_tls(); {mb_ctor} }});
 {fourk_static}
 {dramachi_static}
 
@@ -128,14 +134,31 @@ fn err_json(msg: impl ToString) -> String {{
 }}
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeInit<'local>(
+    mut env: JNIEnv<'local>, _class: JClass<'local>, data_dir: JString<'local>,
+) {{
+    ensure_tls();
+    let dir = get_str(&mut env, data_dir);
+    if !dir.is_empty() {{
+        unsafe {{
+            std::env::set_var("HOME", &dir);
+            std::env::set_var("XDG_CONFIG_HOME", &dir);
+            std::env::set_var("XDG_DATA_HOME", &dir);
+            std::env::set_var("XDG_CACHE_HOME", &dir);
+        }}
+    }}
+}}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeHomepage<'local>(
     mut env: JNIEnv<'local>, _class: JClass<'local>, page: jint,
 ) -> jstring {{
+    ensure_tls();
     let page = (page.max(1)) as usize;
     let out = RUNTIME.block_on(async move {{
         match MOVIEBOX.get_homepage("0", page).await {{
             Ok(v) => ok_json(v),
-            Err(e) => err_json(e),
+            Err(e) => err_json(format!("{{e:?}}")),
         }}
     }});
     to_jstring(&mut env, out)
@@ -145,6 +168,7 @@ pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeHomep
 pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeSearch<'local>(
     mut env: JNIEnv<'local>, _class: JClass<'local>, provider: JString<'local>, query: JString<'local>, page: jint,
 ) -> jstring {{
+    ensure_tls();
     let provider = get_str(&mut env, provider).to_lowercase();
     let query = get_str(&mut env, query);
     let page = (page.max(1)) as usize;
@@ -154,7 +178,7 @@ pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeSearc
 {dramachi_search}
             _ => Provider::search(&*MOVIEBOX, &query, page).await.map(|v| serde_json::to_value(v).unwrap_or_default()),
         }};
-        match res {{ Ok(v) => ok_json(v), Err(e) => err_json(e) }}
+        match res {{ Ok(v) => ok_json(v), Err(e) => err_json(format!("{{e:?}}")) }}
     }});
     to_jstring(&mut env, out)
 }}
@@ -163,6 +187,7 @@ pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeSearc
 pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeDetails<'local>(
     mut env: JNIEnv<'local>, _class: JClass<'local>, provider: JString<'local>, id: JString<'local>,
 ) -> jstring {{
+    ensure_tls();
     let provider = get_str(&mut env, provider).to_lowercase();
     let id = get_str(&mut env, id);
     let out = RUNTIME.block_on(async move {{
@@ -171,7 +196,7 @@ pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeDetai
 {dramachi_details}
             _ => Provider::details(&*MOVIEBOX, &id).await.map(|v| serde_json::to_value(v).unwrap_or_default()),
         }};
-        match res {{ Ok(v) => ok_json(v), Err(e) => err_json(e) }}
+        match res {{ Ok(v) => ok_json(v), Err(e) => err_json(format!("{{e:?}}")) }}
     }});
     to_jstring(&mut env, out)
 }}
@@ -180,6 +205,7 @@ pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeDetai
 pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeStreams<'local>(
     mut env: JNIEnv<'local>, _class: JClass<'local>, provider: JString<'local>, id: JString<'local>, season: jint, episode: jint,
 ) -> jstring {{
+    ensure_tls();
     let provider = get_str(&mut env, provider).to_lowercase();
     let id = get_str(&mut env, id);
     let season = season.max(0) as usize;
@@ -190,7 +216,7 @@ pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeStrea
 {dramachi_streams}
             _ => ReleaseProvider::episode_streams(&*MOVIEBOX, &id, season, episode).await.map(|v| serde_json::to_value(v).unwrap_or_default()),
         }};
-        match res {{ Ok(v) => ok_json(v), Err(e) => err_json(e) }}
+        match res {{ Ok(v) => ok_json(v), Err(e) => err_json(format!("{{e:?}}")) }}
     }});
     to_jstring(&mut env, out)
 }}
@@ -199,6 +225,7 @@ pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeStrea
 pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeResolveUrl<'local>(
     mut env: JNIEnv<'local>, _class: JClass<'local>, provider: JString<'local>, url: JString<'local>,
 ) -> jstring {{
+    ensure_tls();
     let provider = get_str(&mut env, provider).to_lowercase();
     let url = get_str(&mut env, url);
     let out = RUNTIME.block_on(async move {{
@@ -215,12 +242,13 @@ pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeResol
 pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeCaptions<'local>(
     mut env: JNIEnv<'local>, _class: JClass<'local>, subject_id: JString<'local>, resource_id: JString<'local>,
 ) -> jstring {{
+    ensure_tls();
     let subject_id = get_str(&mut env, subject_id);
     let resource_id = get_str(&mut env, resource_id);
     let out = RUNTIME.block_on(async move {{
         match MOVIEBOX.get_ext_captions(&subject_id, &resource_id).await {{
             Ok(v) => ok_json(v),
-            Err(e) => err_json(e),
+            Err(e) => err_json(format!("{{e:?}}")),
         }}
     }});
     to_jstring(&mut env, out)
