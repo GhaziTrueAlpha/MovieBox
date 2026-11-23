@@ -79,8 +79,8 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 
     fourk_import = f"use moviebox_tui::providers::fourkhdhub::client::{fk_struct};" if has_fourk else ""
     dramachi_import = f"use moviebox_tui::providers::dramachi::client::{dr_struct};" if has_dramachi else ""
-    fourk_static = f"static FOURK: Lazy<{fk_struct}> = Lazy::new(|| {fk_ctor});" if has_fourk else ""
-    dramachi_static = f"static DRAMACHI: Lazy<{dr_struct}> = Lazy::new(|| {dr_ctor});" if has_dramachi else ""
+    fourk_static = f"static FOURK: Lazy<{fk_struct}> = Lazy::new(|| {{ ensure_tls(); {fk_ctor} }});" if has_fourk else ""
+    dramachi_static = f"static DRAMACHI: Lazy<{dr_struct}> = Lazy::new(|| {{ ensure_tls(); {dr_ctor} }});" if has_dramachi else ""
 
     fourk_search = '        "4khdhub" => Provider::search(&*FOURK, &query, page).await.map(|v| serde_json::to_value(v).unwrap_or_default()),' if has_fourk else ""
     dramachi_search = '        "dramachi" => Provider::search(&*DRAMACHI, &query, page).await.map(|v| serde_json::to_value(v).unwrap_or_default()),' if has_dramachi else ""
@@ -142,6 +142,7 @@ pub extern "system" fn Java_com_moviebox_android_data_NativeMovieBox_nativeInit<
     if !dir.is_empty() {{
         unsafe {{
             std::env::set_var("HOME", &dir);
+            std::env::set_var("TMPDIR", &dir);
             std::env::set_var("XDG_CONFIG_HOME", &dir);
             std::env::set_var("XDG_DATA_HOME", &dir);
             std::env::set_var("XDG_CACHE_HOME", &dir);
