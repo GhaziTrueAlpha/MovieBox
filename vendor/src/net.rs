@@ -43,11 +43,34 @@ fn fallback_servers() -> Vec<std::net::IpAddr> {
 }
 
 fn fallback_config() -> ResolverConfig {
-    ResolverConfig::from_parts(
-        None,
-        Vec::new(),
-        NameServerConfigGroup::from_ips_clear(&fallback_servers(), FALLBACK_DNS_PORT, true),
-    )
+    // Android and carrier networks frequently block or hijack plain DNS on
+    // port 53, which is why every MovieBox host lookup exhausted its resolvers.
+    // Lead with DNS-over-HTTPS (port 443, almost always allowed) across all
+    // three providers, then keep plain UDP/TCP port 53 as a last resort.
+    let mut group = NameServerConfigGroup::from_ips_https(
+        CLOUDFLARE_IPS,
+        443,
+        "cloudflare-dns.com".to_string(),
+        true,
+    );
+    group.merge(NameServerConfigGroup::from_ips_https(
+        GOOGLE_IPS,
+        443,
+        "dns.google".to_string(),
+        true,
+    ));
+    group.merge(NameServerConfigGroup::from_ips_https(
+        QUAD9_IPS,
+        443,
+        "dns.quad9.net".to_string(),
+        true,
+    ));
+    group.merge(NameServerConfigGroup::from_ips_clear(
+        &fallback_servers(),
+        FALLBACK_DNS_PORT,
+        true,
+    ));
+    ResolverConfig::from_parts(None, Vec::new(), group)
 }
 
 fn build_resolver() -> TokioResolver {
@@ -55,7 +78,7 @@ fn build_resolver() -> TokioResolver {
         Ok(builder) => builder,
         Err(e) => {
             log::warn!(
-                "system DNS resolver failed ({e}); falling back to public DNS (Cloudflare/Google/Quad9)"
+                "system DNS resolver failed ({e}); falling back to public DNS-over-HTTPS (Cloudflare/Google/Quad9 on 443) with plain port 53 as last resort"
             );
             TokioResolver::builder_with_config(
                 fallback_config(),
@@ -193,14 +216,16 @@ mod tests {
     fn fallback_config_contains_public_resolvers() {
         let config = fallback_config();
         let servers = config.name_servers();
-        assert!(servers.len() >= 12);
-        assert!(servers.iter().any(|server| server.socket_addr.ip()
-            == std::net::IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1))));
+        // 12 DNS-over-HTTPS (443) + 24 plain UDP/TCP (53) = 36 resolvers.
+        assert_eq!(servers.len(), 36);
+        assert!(servers.iter().any(|server| server.socket_addr.port() == 443));
         assert!(
             servers
                 .iter()
                 .any(|server| server.socket_addr.port() == FALLBACK_DNS_PORT)
         );
+        assert!(servers.iter().any(|server| server.socket_addr.ip()
+            == std::net::IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1))));
     }
 
     #[test]

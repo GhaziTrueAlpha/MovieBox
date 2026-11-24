@@ -64,6 +64,39 @@ class StremioClient {
         }
     }
 
+    /** Fetches a plain catalog (no search suffix), e.g. /catalog/movie/top.json. */
+    suspend fun fetchCatalog(catalogAddonUrl: String, type: MediaType): Result<List<MediaItem>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val base = normalizeBase(catalogAddonUrl)
+                val stremioType = if (type == MediaType.SERIES) "series" else "movie"
+                val url = "$base/catalog/$stremioType/top.json"
+                val request = Request.Builder().url(url).get().build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    val body = response.body?.string().orEmpty()
+                    val metas = JSONObject(body).optJSONArray("metas") ?: return@use emptyList()
+                    buildList {
+                        for (i in 0 until metas.length()) {
+                            val obj = metas.getJSONObject(i)
+                            add(
+                                MediaItem(
+                                    id = obj.optString("id"),
+                                    title = obj.optString("name", "Untitled"),
+                                    year = obj.optString("releaseInfo", ""),
+                                    type = if (obj.optString("type") == "series") MediaType.SERIES else MediaType.MOVIE,
+                                    posterUrl = obj.optString("poster", ""),
+                                    overview = obj.optString("description", ""),
+                                    rating = obj.optString("imdbRating", ""),
+                                    provider = ProviderOption.STREMIO
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
     suspend fun fetchEpisodes(catalogAddonUrl: String, seriesId: String): Result<List<EpisodeItem>> =
         withContext(Dispatchers.IO) {
             runCatching {

@@ -17,3 +17,5 @@ rust-bridge/target/
 
 # Native .so is built fresh by the GitHub Actions workflow
 app/src/main/jniLibs/
+.kotlin/
+.tmp/

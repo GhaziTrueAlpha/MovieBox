@@ -79,7 +79,7 @@ fun HomeScreen(
 
         item {
             Text(
-                text = "Trending on MovieBox",
+                text = "Trending Movies & Shows",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )

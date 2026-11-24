@@ -53,7 +53,7 @@ fun MovieBoxApp() {
     var currentTab by remember { mutableIntStateOf(0) }
     var selectedTheme by remember { mutableStateOf(store.selectedTheme) }
     var selectedProvider by remember { mutableStateOf(ProviderOption.MOVIEBOX) }
-    var streamAddonUrl by remember { mutableStateOf(store.streamAddonUrl.ifBlank { DEFAULT_ADDON_URLS }) }
+    var streamAddonUrl by remember { mutableStateOf(sanitizeStreamAddons(store.streamAddonUrl)) }
     var useExternalPlayer by remember { mutableStateOf(store.useExternalPlayer) }
 
     var trendingItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
@@ -97,7 +97,15 @@ fun MovieBoxApp() {
 
     LaunchedEffect(Unit) {
         isLoadingTrending = true
-        NativeMovieBox.fetchHomepage(1).onSuccess { trendingItems = it.take(30) }
+        val nativeItems = NativeMovieBox.fetchHomepage(1).getOrNull().orEmpty()
+        trendingItems = nativeItems.take(30)
+        if (trendingItems.isEmpty()) {
+            // Native engine is down or returned nothing: fall back to the
+            // Cinemeta top catalogs so Home always shows movies and series.
+            val movies = stremioClient.fetchCatalog(DEFAULT_CINEMETA, MediaType.MOVIE).getOrNull().orEmpty()
+            val series = stremioClient.fetchCatalog(DEFAULT_CINEMETA, MediaType.SERIES).getOrNull().orEmpty()
+            trendingItems = movies.take(15) + series.take(15)
+        }
         isLoadingTrending = false
     }
 
@@ -181,13 +189,23 @@ fun MovieBoxApp() {
         isSearching = true
         searchError = null
         scope.launch {
-            val res = if (provider == ProviderOption.STREMIO) {
-                stremioClient.searchCatalog(DEFAULT_CINEMETA, searchQuery, MediaType.MOVIE)
+            if (provider == ProviderOption.STREMIO) {
+                // Search movies and series so Addon results are not movie-only.
+                val movies = stremioClient.searchCatalog(DEFAULT_CINEMETA, searchQuery, MediaType.MOVIE)
+                val series = stremioClient.searchCatalog(DEFAULT_CINEMETA, searchQuery, MediaType.SERIES)
+                val combined = movies.getOrNull().orEmpty() + series.getOrNull().orEmpty()
+                if (combined.isNotEmpty()) {
+                    searchResults = combined.distinctBy { it.id to it.type }
+                } else {
+                    searchError = (movies.exceptionOrNull()?.message
+                        ?: series.exceptionOrNull()?.message
+                        ?: "No results found")
+                }
             } else {
-                NativeMovieBox.search(provider, searchQuery, 1)
+                val res = NativeMovieBox.search(provider, searchQuery, 1)
+                res.onSuccess { searchResults = it }
+                    .onFailure { searchError = it.message }
             }
-            res.onSuccess { searchResults = it }
-                .onFailure { searchError = it.message }
             isSearching = false
         }
     }
@@ -334,6 +352,22 @@ fun MovieBoxApp() {
 }
 
 private const val DEFAULT_ADDON_URLS =
-    "https://webstreamr.hayd.uk/manifest.json, https://nodebrid.fly.dev/manifest.json"
+    "https://torrentio.strem.fun/manifest.json"
+
+/** Hosts that were the old default stream addons but are now dead. Older installs
+ *  still have them in their saved settings, so they must be filtered out on load. */
+private val DEPRECATED_ADDON_HOSTS = setOf(
+    "webstreamr.hayd.uk",
+    "nodebrid.fly.dev"
+)
+
+/** Returns the stored stream addon URL with deprecated hosts removed, falling back to the default. */
+private fun sanitizeStreamAddons(stored: String): String {
+    val kept = stored
+        .split(",")
+        .map { it.trim() }
+        .filter { it.isNotBlank() && DEPRECATED_ADDON_HOSTS.none { host -> it.contains(host) } }
+    return if (kept.isEmpty()) DEFAULT_ADDON_URLS else kept.joinToString(", ")
+}
 private const val DEFAULT_PLAYLIST = "https://iptv-org.github.io/iptv/index.m3u"
 private const val DEFAULT_CINEMETA = "https://v3-cinemeta.strem.io/manifest.json"
