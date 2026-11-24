@@ -44,6 +44,8 @@ data class StreamSource(
     val headers: Map<String, String> = emptyMap(),
     val subtitles: List<SubtitleTrack> = emptyList(),
     val resourceId: String = "",
+    /** Raw serialized Rust Release, kept for native resolve/recovery of direct URLs. */
+    val resourceJson: String = "",
     val provider: ProviderOption = ProviderOption.MOVIEBOX
 )
 

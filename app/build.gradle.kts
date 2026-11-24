@@ -12,20 +12,40 @@ android {
         applicationId = "com.moviebox.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    // Native Rust library ships in app/src/main/jniLibs (built by cargo-ndk in CI/local).
+
+    // Release keystore is committed to the repo (public, sideload-only app).
+    // Passwords live in keystore/moviebox-keystore.properties.
+    signingConfigs {
+        val keystoreProps = rootDir.resolve("keystore/moviebox-keystore.properties").readLines()
+            .associate { line ->
+                val idx = line.indexOf('=')
+                line.substring(0, idx).trim() to line.substring(idx + 1).trim()
+            }
+        create("release") {
+            storeFile = rootDir.resolve("keystore/moviebox-release.keystore")
+            storePassword = keystoreProps["storePassword"]
+            keyAlias = keystoreProps["keyAlias"]
+            keyPassword = keystoreProps["keyPassword"]
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

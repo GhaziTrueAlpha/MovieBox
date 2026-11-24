@@ -3,7 +3,9 @@ package com.moviebox.android
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
@@ -12,11 +14,14 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import com.moviebox.android.data.M3uParser
 import com.moviebox.android.data.NativeMovieBox
 import com.moviebox.android.data.RangeDownloadManager
+import com.moviebox.android.data.SettingsStore
 import com.moviebox.android.data.StremioClient
 import com.moviebox.android.model.*
 import com.moviebox.android.player.ExternalPlayerLauncher
@@ -32,7 +37,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        NativeMovieBox.nativeInit(applicationContext, filesDir.absolutePath)
+        NativeMovieBox.init(applicationContext, filesDir.absolutePath)
         setContent { MovieBoxApp() }
     }
 }
@@ -41,14 +46,15 @@ class MainActivity : ComponentActivity() {
 fun MovieBoxApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val store = remember { SettingsStore(context) }
     val stremioClient = remember { StremioClient() }
     val downloadManager = remember { RangeDownloadManager(context) }
 
     var currentTab by remember { mutableIntStateOf(0) }
-    var selectedTheme by remember { mutableStateOf(AppTheme.MOCHA) }
+    var selectedTheme by remember { mutableStateOf(store.selectedTheme) }
     var selectedProvider by remember { mutableStateOf(ProviderOption.MOVIEBOX) }
-    var streamAddonUrl by remember { mutableStateOf("https://webstreamr.hayd.uk/manifest.json, https://nodebrid.fly.dev/manifest.json") }
-    var useExternalPlayer by remember { mutableStateOf(false) }
+    var streamAddonUrl by remember { mutableStateOf(store.streamAddonUrl.ifBlank { DEFAULT_ADDON_URLS }) }
+    var useExternalPlayer by remember { mutableStateOf(store.useExternalPlayer) }
 
     var trendingItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var isLoadingTrending by remember { mutableStateOf(true) }
@@ -58,10 +64,10 @@ fun MovieBoxApp() {
     var isSearching by remember { mutableStateOf(false) }
     var searchError by remember { mutableStateOf<String?>(null) }
 
-    var recentItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var favoriteItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var recentItems by remember { mutableStateOf(store.loadRecents()) }
+    var favoriteItems by remember { mutableStateOf(store.loadFavorites()) }
 
-    var playlistUrl by remember { mutableStateOf("https://iptv-org.github.io/iptv/index.m3u") }
+    var playlistUrl by remember { mutableStateOf(store.playlistUrl.ifBlank { DEFAULT_PLAYLIST }) }
     var liveChannels by remember { mutableStateOf<List<LiveChannel>>(emptyList()) }
     var isLoadingTv by remember { mutableStateOf(false) }
 
@@ -74,6 +80,20 @@ fun MovieBoxApp() {
 
     var activePlayerStream by remember { mutableStateOf<Pair<String, StreamSource>?>(null) }
     val downloads by downloadManager.tasks.collectAsState()
+
+    fun addRecent(item: MediaItem) {
+        recentItems = (listOf(item) + recentItems.filterNot { it.id == item.id }).take(15)
+        store.saveRecents(recentItems)
+    }
+
+    fun toggleFavorite(item: MediaItem) {
+        favoriteItems = if (favoriteItems.any { it.id == item.id }) {
+            favoriteItems.filterNot { it.id == item.id }
+        } else {
+            favoriteItems + item
+        }
+        store.saveFavorites(favoriteItems)
+    }
 
     LaunchedEffect(Unit) {
         isLoadingTrending = true
@@ -111,8 +131,7 @@ fun MovieBoxApp() {
         scope.launch {
             if (item.provider == ProviderOption.STREMIO) {
                 if (item.type == MediaType.SERIES) {
-                    val eps = stremioClient.fetchEpisodes("https://v3-cinemeta.strem.io/manifest.json", item.id)
-                        .getOrDefault(emptyList())
+                    val eps = stremioClient.fetchEpisodes(DEFAULT_CINEMETA, item.id).getOrDefault(emptyList())
                     episodes = eps
                     val first = eps.firstOrNull()
                     selectedEpisode = first
@@ -141,14 +160,13 @@ fun MovieBoxApp() {
 
     fun playStream(title: String, rawStream: StreamSource, item: MediaItem? = null, forceExternal: Boolean = false) {
         scope.launch {
-            var stream = NativeMovieBox.resolveStreamIfNeeded(rawStream)
-            if (item != null && item.provider == ProviderOption.MOVIEBOX && stream.subtitles.isEmpty() && stream.resourceId.isNotBlank()) {
+            var stream = NativeMovieBox.resolveStreamIfNeeded(rawStream, item?.id.orEmpty())
+            if (item != null && item.provider == ProviderOption.MOVIEBOX &&
+                stream.subtitles.isEmpty() && stream.resourceId.isNotBlank()) {
                 val subs = NativeMovieBox.fetchCaptions(item.id, stream.resourceId)
                 if (subs.isNotEmpty()) stream = stream.copy(subtitles = subs)
             }
-            if (item != null) {
-                recentItems = (listOf(item) + recentItems.filterNot { it.id == item.id }).take(15)
-            }
+            if (item != null) addRecent(item)
             selectedMedia = null
             if (forceExternal || useExternalPlayer) {
                 ExternalPlayerLauncher.launch(context, title, stream)
@@ -164,7 +182,7 @@ fun MovieBoxApp() {
         searchError = null
         scope.launch {
             val res = if (provider == ProviderOption.STREMIO) {
-                stremioClient.searchCatalog("https://v3-cinemeta.strem.io/manifest.json", searchQuery, MediaType.MOVIE)
+                stremioClient.searchCatalog(DEFAULT_CINEMETA, searchQuery, MediaType.MOVIE)
             } else {
                 NativeMovieBox.search(provider, searchQuery, 1)
             }
@@ -173,9 +191,23 @@ fun MovieBoxApp() {
             isSearching = false
         }
     }
-
     MovieBoxTheme(appTheme = selectedTheme) {
         Box {
+            if (!NativeMovieBox.isAvailable()) {
+                val err = NativeMovieBox.availabilityError() ?: ""
+                Row(
+                    modifier = Modifier
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Native engine unavailable: $err. Live providers disabled; Stremio addons and Live TV still work.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
             Scaffold(
                 bottomBar = {
                     NavigationBar {
@@ -230,17 +262,11 @@ fun MovieBoxApp() {
                             errorMessage = searchError,
                             onSearch = { runSearch(selectedProvider) },
                             onSelectItem = ::openMedia,
-                            onToggleFavorite = { item ->
-                                favoriteItems = if (favoriteItems.any { it.id == item.id }) {
-                                    favoriteItems.filterNot { it.id == item.id }
-                                } else {
-                                    favoriteItems + item
-                                }
-                            }
+                            onToggleFavorite = ::toggleFavorite
                         )
                         2 -> LiveTvScreen(
                             playlistUrl = playlistUrl,
-                            onPlaylistUrlChange = { playlistUrl = it },
+                            onPlaylistUrlChange = { playlistUrl = it; store.playlistUrl = it },
                             channels = liveChannels,
                             isLoading = isLoadingTv,
                             onLoadPlaylist = {
@@ -259,11 +285,11 @@ fun MovieBoxApp() {
                             onPauseDownload = downloadManager::pause,
                             onResumeDownload = downloadManager::startOrResume,
                             streamAddonUrl = streamAddonUrl,
-                            onStreamAddonUrlChange = { streamAddonUrl = it },
+                            onStreamAddonUrlChange = { streamAddonUrl = it; store.streamAddonUrl = it },
                             useExternalPlayerByDefault = useExternalPlayer,
-                            onExternalPlayerToggle = { useExternalPlayer = it },
+                            onExternalPlayerToggle = { useExternalPlayer = it; store.useExternalPlayer = it },
                             selectedTheme = selectedTheme,
-                            onThemeSelect = { selectedTheme = it }
+                            onThemeSelect = { selectedTheme = it; store.selectedTheme = it }
                         )
                     }
                 }
@@ -287,7 +313,7 @@ fun MovieBoxApp() {
                     onPlayExternal = { stream -> playStream(media.title, stream, media, forceExternal = true) },
                     onDownload = { stream ->
                         scope.launch {
-                            val resolved = NativeMovieBox.resolveStreamIfNeeded(stream)
+                            val resolved = NativeMovieBox.resolveStreamIfNeeded(stream, media.id)
                             selectedMedia = null
                             downloadManager.enqueue(media.title, resolved.url, resolved.headers)
                             currentTab = 3
@@ -306,3 +332,8 @@ fun MovieBoxApp() {
         }
     }
 }
+
+private const val DEFAULT_ADDON_URLS =
+    "https://webstreamr.hayd.uk/manifest.json, https://nodebrid.fly.dev/manifest.json"
+private const val DEFAULT_PLAYLIST = "https://iptv-org.github.io/iptv/index.m3u"
+private const val DEFAULT_CINEMETA = "https://v3-cinemeta.strem.io/manifest.json"

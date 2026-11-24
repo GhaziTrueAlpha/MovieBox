@@ -1,0 +1,19 @@
+.gradle/
+
+build/
+
+app/build/
+
+local.properties
+
+.idea/
+
+*.iml
+
+*.log
+
+# Rust build output (built by CI via cargo-ndk)
+rust-bridge/target/
+
+# Native .so is built fresh by the GitHub Actions workflow
+app/src/main/jniLibs/
